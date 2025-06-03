@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct CardGameView: View {
     @AppStorage("playerName") private var playerName: String = ""
@@ -11,6 +12,14 @@ struct CardGameView: View {
     @State private var turn = 0
     @State private var gameOver = false
     @State private var showSummary = false
+    @State private var gameTimer: Timer?
+    @State private var isGameActive = false
+    @Environment(\.colorScheme) var colorScheme
+    @Environment(\.scenePhase) var scenePhase
+    
+    @State private var cardFlipPlayer: AVAudioPlayer?
+    @State private var backgroundMusicPlayer: AVAudioPlayer?
+    @State private var winSoundPlayer: AVAudioPlayer?
 
     let totalTurns = 10
     let cardValues = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "A"]
@@ -19,38 +28,55 @@ struct CardGameView: View {
         NavigationStack {
             GeometryReader { geo in
                 VStack {
-                    // ניקוד
                     HStack {
                         VStack {
                             Text(playerName)
+                                .foregroundColor(colorScheme == .dark ? .white : .primary)
                             Text("\(leftScore)")
+                                .foregroundColor(colorScheme == .dark ? .white : .primary)
                         }
                         Spacer()
                         VStack {
                             Text("PC")
+                                .foregroundColor(colorScheme == .dark ? .white : .primary)
                             Text("\(rightScore)")
+                                .foregroundColor(colorScheme == .dark ? .white : .primary)
                         }
                     }
                     .font(.title)
                     .padding(.horizontal)
                     .padding(.top, geo.safeAreaInsets.top + 20)
                     
-                    // קלפים + טיימר במרכז
+                    Spacer()
+                    
                     HStack(spacing: 30) {
                         cardImage(for: leftCard, isFaceUp: flip)
                         VStack {
                             Image(systemName: "clock")
+                                .foregroundColor(colorScheme == .dark ? .white : .primary)
                             Text("\(timerCount)")
+                                .foregroundColor(colorScheme == .dark ? .white : .primary)
+                                .font(.title)
                         }
                         cardImage(for: rightCard, isFaceUp: flip)
                     }
-                    .padding(.top, 40)
 
                     Spacer()
+                    
+                    Text("Turn \(turn)/\(totalTurns)")
+                        .foregroundColor(colorScheme == .dark ? .white : .secondary)
+                        .padding(.bottom)
                 }
-//                .frame(width: geo.size.width, height: geo.size.height)
+                .background(colorScheme == .dark ? Color.black : Color.clear)
                 .onAppear {
-                    startTurn()
+                    setupAudio()
+                    startGame()
+                }
+                .onDisappear {
+                    stopGame()
+                }
+                .onChange(of: scenePhase) { oldPhase, newPhase in
+                    handleScenePhaseChange(newPhase)
                 }
                 .navigationDestination(isPresented: $showSummary) {
                     SummaryView(
@@ -58,8 +84,10 @@ struct CardGameView: View {
                         winnerScore: max(leftScore, rightScore)
                     )
                 }
+                .navigationBarHidden(true)
             }
         }
+        .navigationBarBackButtonHidden(true)
     }
 
     func cardImage(for name: String, isFaceUp: Bool) -> some View {
@@ -71,13 +99,73 @@ struct CardGameView: View {
             .animation(.easeInOut(duration: 0.6), value: isFaceUp)
             .shadow(radius: 4)
     }
+    
+    func setupAudio() {
+        if let musicPath = Bundle.main.path(forResource: "background_music", ofType: "wav") {
+            let musicUrl = URL(fileURLWithPath: musicPath)
+            do {
+                backgroundMusicPlayer = try AVAudioPlayer(contentsOf: musicUrl)
+                backgroundMusicPlayer?.numberOfLoops = -1
+                backgroundMusicPlayer?.volume = 0.3
+            } catch {
+                print("Could not create background music player: \(error)")
+            }
+        }
+        
+        if let flipPath = Bundle.main.path(forResource: "card_flip", ofType: "wav") {
+            let flipUrl = URL(fileURLWithPath: flipPath)
+            do {
+                cardFlipPlayer = try AVAudioPlayer(contentsOf: flipUrl)
+                cardFlipPlayer?.volume = 0.5
+            } catch {
+                print("Could not create card flip player: \(error)")
+            }
+        }
+        
+        if let winPath = Bundle.main.path(forResource: "win_sound", ofType: "wav") {
+            let winUrl = URL(fileURLWithPath: winPath)
+            do {
+                winSoundPlayer = try AVAudioPlayer(contentsOf: winUrl)
+                winSoundPlayer?.volume = 0.7
+            } catch {
+                print("Could not create win sound player: \(error)")
+            }
+        }
+    }
+    
+    func startGame() {
+        guard !isGameActive else { return }
+        isGameActive = true
+        backgroundMusicPlayer?.play()
+        startTurn()
+    }
+    
+    func stopGame() {
+        isGameActive = false
+        gameTimer?.invalidate()
+        gameTimer = nil
+        backgroundMusicPlayer?.stop()
+    }
+    
+    func handleScenePhaseChange(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            if gameTimer == nil && isGameActive && !gameOver {
+                startTurn()
+            }
+            backgroundMusicPlayer?.play()
+        case .inactive, .background:
+            gameTimer?.invalidate()
+            gameTimer = nil
+            backgroundMusicPlayer?.pause()
+        @unknown default:
+            break
+        }
+    }
 
     func startTurn() {
-        guard turn < totalTurns else {
-            gameOver = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                showSummary = true
-            }
+        guard turn < totalTurns && isGameActive else {
+            endGame()
             return
         }
 
@@ -90,11 +178,16 @@ struct CardGameView: View {
         leftCard = l.name
         rightCard = r.name
 
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
+        gameTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
             timerCount -= 1
 
             if timerCount == 0 {
                 timer.invalidate()
+                gameTimer = nil
+                
+                
+                cardFlipPlayer?.play()
+                
                 flip = true
 
                 if l.value > r.value {
@@ -104,9 +197,22 @@ struct CardGameView: View {
                 }
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    startTurn()
+                    if isGameActive {
+                        startTurn()
+                    }
                 }
             }
+        }
+    }
+    
+    func endGame() {
+        gameOver = true
+        stopGame()
+        
+        winSoundPlayer?.play()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            showSummary = true
         }
     }
 
@@ -118,11 +224,11 @@ struct CardGameView: View {
 
     func gameResult() -> (name: String, text: String) {
         if leftScore > rightScore {
-            return (playerName, "\(playerName) ניצח/ה 🎉")
+            return (playerName, "\(playerName) Won! ")
         } else if rightScore > leftScore {
-            return ("PC", "המחשב ניצח 🎉")
+            return ("PC", "PC Won! ")
         } else {
-            return ("תיקו", "תיקו 🤝")
+            return ("PC", "PC Won! ")
         }
     }
 }

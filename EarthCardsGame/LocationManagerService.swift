@@ -11,28 +11,59 @@ class LocationManagerService: NSObject, ObservableObject, CLLocationManagerDeleg
     override init() {
         super.init()
         locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
     }
 
     func requestLocation() {
-        locationManager.requestWhenInUseAuthorization()
-        locationManager.requestLocation()
+        let status = locationManager.authorizationStatus
+        
+        switch status {
+        case .notDetermined:
+            locationManager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            locationManager.requestLocation()
+        case .denied, .restricted:
+            permissionDenied = true
+        @unknown default:
+            break
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        if status == .denied || status == .restricted {
+        switch status {
+        case .authorizedWhenInUse, .authorizedAlways:
+            permissionDenied = false
+            locationManager.requestLocation()
+        case .denied, .restricted:
             permissionDenied = true
+            isLocationAvailable = false
+        case .notDetermined:
+            break
+        @unknown default:
+            break
         }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         print("Location failed: \(error.localizedDescription)")
+        
+        #if DEBUG
+        if error.localizedDescription.contains("network") {
+            lastKnownLongitude = 34.8
+            isLocationAvailable = true
+            print("Using simulated location for testing")
+        }
+        #endif
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         if let location = locations.first {
             lastKnownLongitude = location.coordinate.longitude
             isLocationAvailable = true
+            print("Location updated: \(location.coordinate.longitude)")
+            
+            
+            locationManager.stopUpdatingLocation()
         }
     }
 }
-
